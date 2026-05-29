@@ -1,265 +1,156 @@
 # 面向科学数据的自适应压缩技术研究与实现
 
-本仓库是论文《面向科学数据的自适应压缩技术研究与实现》的精简工程快照，重点保留了数据构建、压缩打标、候选流水线注册、最新模型产物，以及部分测试与绘图脚本。
+本仓库是论文《面向科学数据的自适应压缩技术研究与实现》的工程化快照，当前版本重点保留三条主线：
 
+- 科学数据下载、切片、抽样、压缩打标和训练数据生成脚本。
+- `nnmax_quantile_ensemble_v1` 流水线选择模型及其测试报告。
+- `Compressor/` 可部署压缩层，可将模型选线、压缩封装和无损解压串成命令行工具。
 
+当前仓库不包含 `RawDataset/`、`MediumDataset/`、`Dataset/` 等大体积数据目录。模型权重 `Model/selector_nnmax_ensemble.pt` 约 140 MB，已通过 Git LFS 管理。
 
-## 推荐工作流
+## 快速开始
 
-如果你想顺着论文主线理解整个工程，建议按这个顺序看和用：
+首次克隆后建议先拉取 LFS 模型文件并安装依赖：
 
-1. `python Script/download_raw_datasets.py`
-2. `python Script/sample_dataset_preserve_format.py --input-dir ./RawDataset --output-root ./MediumDataset`
-3. `python Script/export_medium_subset_to_dataset.py --source-dir ./MediumDataset --dest-dir ./Dataset`
-4. `python Script/flatten_dataset_to_dataset_folder.py --dataset-root ./Dataset`
-5. `python Script/compress_and_label.py --preset benchmark_curated`
-6. `python Script/mian_train_and_test.py ...`
+```powershell
+git lfs install
+git lfs pull
 
-其中前 1 到 5 步是当前快照里最完整、最直接的“数据准备和打标链路”；第 6 步和 `Script/test/` 下的大部分脚本在当前快照中还缺少部分训练模块依赖，下面会单独说明。
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
 
-## 先看这几个限制
-
-- 当前仓库没有附带 `RawDataset/`、`MediumDataset/`、`Dataset/`、`NewDataset/` 等大体积数据目录。
-- 当前仓库没有附带 `train_selector_model_science_accboost.py`、`run_ablation.py` 等旧训练/实验模块。
-- 因此，`Script/mian_train_and_test.py` 和 `Script/test/` 下多数脚本目前不能在这个快照里直接运行。
-- 当前仓库随附的模型文件位于 `Model/` 根目录，而不是部分脚本默认写的 `Model/nnmax/`。
-
-## Compressor 落地层
-
-根目录新增了 `Compressor/`，用于把训练好的流水线选择思路真正落地为可执行的压缩/解压工具。
-
-当前实现特点：
-
-- 输出格式固定为 `.cpss`
-- 文件头固定 64 字节，包含 `pipeline_id`
-- 解压时可以直接从文件头读取要使用的流水线
-- 对类型不对齐的尾字节会单独保留，保证严格无损
-- 默认支持 `auto / exhaustive / model / hybrid` 四种选线模式
-- 在缺少 `torch` 或部分编码器依赖时，会自动回退到可运行的穷举模式
-
-常用命令：
+检查当前环境支持哪些可部署流水线：
 
 ```powershell
 python -m Compressor.cli check-env
-python -m Compressor.cli compress .\example.bin
-python -m Compressor.cli compress .\field.f32 --dtype float32 --shape 100,500,500
+```
+
+压缩、查看和解压文件：
+
+```powershell
+python -m Compressor.cli compress .\example.bin --selector auto
 python -m Compressor.cli inspect .\example.bin.cpss
 python -m Compressor.cli decompress .\example.bin.cpss
 ```
 
-环境初始化：
+如果压缩的是原始科学数组，建议显式提供类型和形状，模型选线会更稳定：
 
 ```powershell
-python Compressor/setup_env.py
-# 或
-powershell -ExecutionPolicy Bypass -File .\Compressor\setup_env.ps1
+python -m Compressor.cli compress .\field.f32 --dtype float32 --shape 100,500,500 --selector auto
+```
+
+## 当前模型
+
+随仓库提供的模型文件位于 `Model/` 根目录：
+
+| 文件 | 作用 |
+| --- | --- |
+| `selector_nnmax_ensemble.pt` | nnmax 集成选择器权重，使用 Git LFS 管理 |
+| `feature_names_nnmax.json` | 特征名和分箱配置 |
+| `feature_norm_nnmax.npz` | 特征归一化参数和阈值 |
+| `test_report_nnmax.json` | 训练与测试摘要、候选模型、预测明细 |
+
+`Model/test_report_nnmax.json` 中的当前摘要：
+
+| 指标 | 值 |
+| --- | --- |
+| 模型 | `nnmax_quantile_ensemble_v1` |
+| 候选流水线标签数 | 27 |
+| 训练 / 测试样本数 | 2080 / 520 |
+| 原始特征维度 | 322 |
+| 分箱后特征维度 | 5152 |
+| Test accuracy | 0.8442 |
+| Test top-2 accuracy | 0.9692 |
+| Test relative CR | 0.9978 |
+| Test macro F1 | 0.5757 |
+
+## Compressor 压缩层
+
+`Compressor/` 是当前项目的部署入口，输出格式固定为 `.cpss`。
+
+核心特性：
+
+- `.cpss` 文件包含 64 字节固定头、JSON 元数据、尾字节和压缩 payload。
+- 固定头保存 `pipeline_id`，解压时可从文件本身恢复所需流水线。
+- 对 dtype 不对齐的尾字节单独保存，保证严格无损。
+- 可部署流水线固定在 `Compressor/deploy_registry.py`，当前共 27 条。
+- 默认 `--selector model` 直接用模型预测；建议首次使用 `--selector auto`，模型或环境不可用时会回退到穷举模式。
+
+选择器模式：
+
+| 模式 | 说明 |
+| --- | --- |
+| `model` | 使用模型预测一条流水线，不做额外试压缩 |
+| `hybrid` | 模型先排序，再试压 Top-K 条流水线 |
+| `exhaustive` | 穷举所有可部署流水线，选择 `.cpss` 总大小最小的方案 |
+| `auto` | 优先走 `hybrid`，失败时自动回退到 `exhaustive` |
+
+更多 CLI 参数见 [Compressor/README.md](Compressor/README.md)。
+
+## 数据与训练流程
+
+如果只想下载一个不超过 1 GiB 的精选原始数据子集：
+
+```powershell
+python Script/download_benchmark_1gb_subset.py --remove-archives
+```
+
+如果已经有完整 `RawDataset/`，也可以把精选文件复制成独立目录：
+
+```powershell
+python Script/build_benchmark_subset.py --source RawDataset --dest BenchmarkDataset1GB
+```
+
+完整数据准备、压缩打标和训练流程如下：
+
+```powershell
+python Script/download_raw_datasets.py
+python Script/sample_dataset_preserve_format.py --input-dir ./RawDataset --output-root ./MediumDataset
+python Script/export_medium_subset_to_dataset.py --source-dir ./MediumDataset --dest-dir ./Dataset --per-folder 200
+python Script/flatten_dataset_to_dataset_folder.py --dataset-root ./Dataset
+python Script/compress_and_label.py --preset benchmark_curated
+python Script/mian_train_and_test.py --model-dir ./Model --epochs 150 --top-k 3
 ```
 
 说明：
 
-- `check-env` 会逐条探测当前环境下哪些可部署流水线可用。
-- 如果希望模型选线效果更稳定，建议在压缩时尽量显式提供 `--dtype` 和 `--shape`。
-- 浮点型 `delta / higher_order_delta` 在未安装 `imagecodecs` 时会被自动禁用，以保证位级可逆。
+- `download_raw_datasets.py` 需要联网，支持 `--only` 只下载指定数据源。
+- `compress_and_label.py` 默认 preset 是 `compressors_plus_single_filter_x_compressor`，会跑大量组合，耗时较长；快速复现实验可先用 `--preset benchmark_curated`。
+- `mian_train_and_test.py` 文件名中的 `mian` 是当前仓库保留的历史命名，运行时请按实际文件名输入。
+- 训练依赖 `Dataset/train.json`、`Dataset/test.json` 以及 `Dataset/` 中的切片文件。
 
 ## 脚本总览
 
-| 脚本 | 作用 | 当前快照 |
-| --- | --- | --- |
-| `Script/download_raw_datasets.py` | 下载公开原始数据到 `RawDataset/` | 可直接运行，需联网 |
-| `Script/sample_dataset_preserve_format.py` | 结构保持切片，生成 `MediumDataset/` | 可直接运行 |
-| `Script/export_medium_subset_to_dataset.py` | 从 `MediumDataset/` 抽样构造 `Dataset/` | 可直接运行 |
-| `Script/flatten_dataset_to_dataset_folder.py` | 将 `Dataset/` 扁平化到 `Dataset/dataset/` | 可直接运行 |
-| `Script/pipeline_registry.py` | 压缩器/过滤器注册中心和执行入口 | 模块，不是命令行脚本 |
-| `Script/compress_and_label.py` | 对样本跑候选流水线并生成 `train.json`/`test.json` | 可直接运行，但要求已有 `Dataset/` |
-| `Script/mian_train_and_test.py` | 训练 nnmax 集成模型 | 可查看 `--help`，实际训练仍缺依赖 |
-| `Script/test/common_accboost_test.py` | 测试脚本公用函数 | 模块，不是命令行脚本 |
-| `Script/test/plot_nnmax_pipeline_bar.py` | 绘制 nnmax 与 27 条流水线对比柱状图 | 可直接运行，优先读取 `Model/test_report_nnmax.json` |
-| `Script/test/test_file_type_bar.py` | 按文件类型抽样比较模型与固定流水线 | 当前快照缺依赖，不能直接运行 |
-| `Script/test/test_newdataset_generalization_bar.py` | 新数据集泛化柱状图 | 当前快照缺依赖，不能直接运行 |
-| `Script/test/test_rawdataset_trainset_bar.py` | 按原始来源目录抽样比较 | 当前快照缺依赖，不能直接运行 |
-| `Script/test/test_hyperparameter_line.py` | 小规模超参数 sweep 和折线图 | 当前快照缺依赖，不能直接运行 |
-| `Script/test/test.py` | 批量调度上面几类测试 | 可查看 `--help`，实际运行仍依赖旧测试链路 |
+| 路径 | 作用 |
+| --- | --- |
+| `Script/download_benchmark_1gb_subset.py` | 下载精选的 <=1 GiB 原始数据子集到 `RawDataset/` |
+| `Script/build_benchmark_subset.py` | 从已有 `RawDataset/` 复制精选文件到 `BenchmarkDataset1GB/` |
+| `Script/download_raw_datasets.py` | 下载完整公开原始数据到 `RawDataset/` |
+| `Script/sample_dataset_preserve_format.py` | 从原始数据结构保持切片，生成 `MediumDataset/` |
+| `Script/export_medium_subset_to_dataset.py` | 从 `MediumDataset/` 按目录抽样生成 `Dataset/` |
+| `Script/flatten_dataset_to_dataset_folder.py` | 将 `Dataset/` 扁平化为 `Dataset/dataset/` 并改写元数据 |
+| `Script/compress_and_label.py` | 对切片运行候选流水线，写回最佳标签并导出 `train.json` / `test.json` |
+| `Script/pipeline_registry.py` | 过滤器、压缩器、流水线 preset 和执行入口注册中心 |
+| `Script/mian_train_and_test.py` | 训练 nnmax 分位数分箱神经集成模型 |
 
-## 逐脚本说明
+## 项目结构
 
-### `Script/download_raw_datasets.py`
-
-功能：
-
-- 从公开 URL 下载论文中使用的一批示例科学数据。
-- 自动把归档文件放到 `RawDataset/_archives/`，并把可解压的内容展开到 `RawDataset/` 对应目录。
-
-输入输出：
-
-- 输入：网络数据源。
-- 输出：`RawDataset/`、`RawDataset/_archives/`。
-
-当前快照：
-
-- 可直接运行，但必须联网。
-
-常用命令：
-
-```powershell
-python Script/download_raw_datasets.py
+```text
+Compressor/       可部署压缩、解压、选线和 .cpss 封装代码
+Model/            当前 nnmax 模型权重、归一化参数和测试报告
+Script/           数据下载、切片、打标、训练相关脚本
+requirements.txt  Python 依赖
+.gitattributes    Git LFS 配置，管理 .pt 模型权重
 ```
 
-只下载指定数据源：
+生成的数据目录通常很大，不建议直接提交到 Git：
 
-```powershell
-python Script/download_raw_datasets.py --only oisst_v2_1 era5_pressure_level viirs_surface_albedo
+```text
+RawDataset/
+MediumDataset/
+BenchmarkDataset1GB/
+Dataset/
+NewDataset/
 ```
-
-`--only` 可选值：
-
-- `cesm_atm_dataset1`
-- `cesm_atm_dataset2`
-- `era5_pressure_level`
-- `exafel_dataset2`
-- `hurricane_isabel`
-- `igsr_fastq`
-- `landsat_qa_pixel`
-- `miranda_small`
-- `nyx_512`
-- `oisst_v2_1`
-- `rcsb_mmcif`
-- `refseq_ecoli`
-- `refseq_human`
-- `s3d`
-- `viirs_i1_sdr_swath`
-- `viirs_surface_albedo`
-
-### `Script/sample_dataset_preserve_format.py`
-
-功能：
-
-- 从 `RawDataset/` 中读取原始文件。
-- 按文件类型做“结构保持”切片，生成中等大小样本。
-- 输出到 `MediumDataset/`，并生成 `MediumDataset/data.json`。
-
-输入输出：
-
-- 输入：`RawDataset/`
-- 输出：`MediumDataset/` 和 `MediumDataset/data.json`
-
-
-常用命令：
-
-```powershell
-python Script/sample_dataset_preserve_format.py --input-dir ./RawDataset --output-root ./MediumDataset
-```
-
-
-常用参数：
-
-- `--min-kb` / `--max-kb`：目标切片大小范围，默认约 `10000` 到 `50000` KB。
-- `--include-archives`：把归档目录中的文件也纳入处理。
-- `--shuffle`：打乱切片顺序后再编号。
-- `--max-files`：限制读取的原始文件数。
-- `--max-pieces-per-file`：限制每个文件最多切出多少块。
-
-### `Script/export_medium_subset_to_dataset.py`
-
-功能：
-
-- 从 `MediumDataset/data.json` 中按顶级目录抽样。
-- 将抽中的样本复制到 `Dataset/`。
-- 生成新的 `Dataset/data.json`。
-
-输入输出：
-
-- 输入：`MediumDataset/` 和 `MediumDataset/data.json`
-- 输出：`Dataset/` 和 `Dataset/data.json`
-
-
-常用命令：
-
-```powershell
-python Script/export_medium_subset_to_dataset.py --source-dir ./MediumDataset --dest-dir ./Dataset --per-folder 200
-```
-
-
-### `Script/flatten_dataset_to_dataset_folder.py`
-
-功能：
-
-- 把 `Dataset/` 下各顶级目录中的样本重新打乱。
-- 统一移动到 `Dataset/dataset/`。
-- 按 `000001.xxx` 这种编号方式重命名，并改写 `Dataset/data.json`。
-
-输入输出：
-
-- 输入：`Dataset/`
-- 输出：更新后的 `Dataset/dataset/` 和 `Dataset/data.json`
-
-常用命令：
-
-```powershell
-python Script/flatten_dataset_to_dataset_folder.py --dataset-root ./Dataset
-```
-
-
-### `Script/pipeline_registry.py`
-
-功能：
-
-- 注册过滤器、压缩器和候选流水线。
-- 提供 `execute_pipeline`、`resolve_pipeline_names`、`check_component_availability` 等统一接口。
-- 做 `dtype` / `shape` 推断，并支持多种 preset。
-
-
-
-### `Script/compress_and_label.py`
-
-功能：
-
-- 读取 `Dataset/data.json`。
-- 对每个样本运行候选流水线。
-- 记录压缩结果、最佳流水线标签、元信息。
-- 最后生成：
-  - 更新后的 `Dataset/data.json`
-  - `Dataset/train.json`
-  - `Dataset/test.json`
-
-输入输出：
-
-- 输入：`Dataset/data.json` 和 `Dataset/` 中的实际样本文件
-- 输出：更新后的 `Dataset/data.json`、`Dataset/train.json`、`Dataset/test.json`
-
-当前快照：
-
-- 可直接运行，但前提是 `Dataset/` 已经准备好。
-
-
-### `Script/mian_train_and_test.py`
-
-功能：
-
-- 训练论文里的 nnmax 分位数分箱集成模型。
-- 从 `Dataset/train.json` 和 `Dataset/test.json` 读取样本。
-- 输出模型权重、特征归一化参数、测试报告。
-
-输入输出：
-
-- 输入：`Dataset/`、旧训练模块、ablation 结果摘要
-- 输出：模型目录中的 `selector_nnmax_ensemble.pt`、`feature_norm_nnmax.npz`、`feature_names_nnmax.json`、`test_report_nnmax.json`
-
-当前快照：
-
-- 不能直接运行。
-- 直接执行会报错：
-  - `ModuleNotFoundError: No module named 'train_selector_model_science_accboost'`
-  - 同时还依赖缺失的 `run_ablation.py`
-
-完整仓库中的典型用法：
-
-```powershell
-python Script/mian_train_and_test.py --model-dir ./Model/nnmax --epochs 150 --top-k 3
-```
-
-如果你后面把缺失模块补回来了，建议同时检查：
-
-- 默认 `--model-dir` 指向 `Model/nnmax/`
-- 当前快照随附的现成模型文件实际在 `Model/` 根目录
-
-

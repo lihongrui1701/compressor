@@ -1,90 +1,68 @@
 # Compressor
 
-`Compressor/` 是项目的落地压缩层，负责把“流水线选择 -> 压缩封装 -> 解压恢复”串成可以直接运行的工具。
+`Compressor/` 是项目的可部署压缩层，负责把“流水线选择 -> 压缩封装 -> 解压恢复”串成可以直接运行的命令行工具。输出文件统一使用 `.cpss` 后缀。
 
-最常用的两个入口在 [cli.py](<c:/Users/Lenovo/Desktop/project/Compressor/cli.py:1>)：
-
-- 压缩入口：`python -m Compressor.cli compress ...`
-- 解压入口：`python -m Compressor.cli decompress ...`
-
-如果你直接运行：
+直接运行模块也会转发到 CLI：
 
 ```powershell
-python -m Compressor
+python -m Compressor --help
+python -m Compressor.cli --help
 ```
 
-它会转发到 `Compressor.cli:main`。
-
-## 快速开始
-
-压缩一个文件：
-
-```powershell
-python -m Compressor.cli compress .\example.bin
-```
-
-解压一个 `.cpss` 文件：
-
-```powershell
-python -m Compressor.cli decompress .\example.bin.cpss
-```
-
-查看封装信息：
-
-```powershell
-python -m Compressor.cli inspect .\example.bin.cpss
-```
-
-检查当前环境支持哪些流水线：
+## 快速命令
 
 ```powershell
 python -m Compressor.cli check-env
+python -m Compressor.cli compress .\example.bin --selector auto
+python -m Compressor.cli inspect .\example.bin.cpss
+python -m Compressor.cli decompress .\example.bin.cpss
 ```
 
-## 压缩入口
+科学数组文件建议传入 dtype 和 shape：
+
+```powershell
+python -m Compressor.cli compress .\field.f32 --dtype float32 --shape 100,500,500 --selector auto
+```
+
+## Compress
 
 命令格式：
 
 ```powershell
-python -m Compressor.cli compress <输入文件> [-o 输出文件] [其他参数]
+python -m Compressor.cli compress <输入文件> [-o 输出文件] [参数]
 ```
-
-压缩命令对应代码入口：
-
-- 命令行入口函数：`command_compress`
-- 核心文件：[cli.py](<c:/Users/Lenovo/Desktop/project/Compressor/cli.py:1>)
 
 默认输出规则：
 
-- 输入：`example.bin`
-- 输出：`example.bin.cpss`
+- 输入 `example.bin`
+- 输出 `example.bin.cpss`
 
-### 参数说明
+参数：
 
-| 参数 | 是否必填 | 默认值 | 功能 |
-| --- | --- | --- | --- |
-| `input` | 是 | 无 | 要压缩的原始文件路径。 |
-| `-o`, `--output` | 否 | 原文件名后追加 `.cpss` | 指定压缩输出文件路径。 |
-| `--selector` | 否 | `model` | 选择流水线的模式。可选值：`auto`、`exhaustive`、`model`、`hybrid`。默认直接使用模型预测，不做额外试压缩。 |
-| `--top-k` | 否 | `3` | 当选择器使用 `hybrid` 时，只实际试压模型排序最靠前的 `K` 条流水线。 |
-| `--model-dir` | 否 | `Model/` | 指定模型目录，覆盖默认的 nnmax 模型位置。 |
-| `--dtype` | 否 | 自动推断 | 手工指定数据类型，例如 `float32`、`float64`、`int32`。适合科学数组文件。 |
-| `--shape` | 否 | 自动推断 | 手工指定数据形状，格式如 `100,500,500`。 |
-| `--endian` | 否 | `little` | 指定字节序。可选值：`little`、`big`。 |
-| `--pipelines` | 否 | 使用全部可部署流水线 | 用逗号分隔的流水线白名单，只在这些流水线里做选择。 |
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `input` | 必填 | 要压缩的原始文件 |
+| `-o`, `--output` | 原文件名追加 `.cpss` | 指定输出路径 |
+| `--selector` | `model` | 选线模式：`auto`、`exhaustive`、`model`、`hybrid` |
+| `--top-k` | `3` | `hybrid` 模式下试压模型排序前 K 条流水线 |
+| `--model-dir` | `Model/` | 覆盖默认模型目录 |
+| `--dtype` | 自动推断 | 手动指定数据类型，如 `float32`、`float64`、`int32` |
+| `--shape` | 自动推断 | 手动指定数组形状，如 `100,500,500` |
+| `--endian` | `little` | 字节序：`little` 或 `big` |
+| `--pipelines` | 全部可部署流水线 | 逗号分隔的流水线白名单 |
 
-### `--selector` 的四种模式
+选择器模式：
 
-如果不显式传 `--selector`，默认使用 `model`。这意味着普通压缩命令默认不会对多条流水线做试压缩比较；如果你希望通过试压来选更优结果，请显式指定 `hybrid` 或 `exhaustive`。
-
-| 模式 | 功能 |
+| 模式 | 行为 |
 | --- | --- |
-| `auto` | 优先尝试模型辅助的 `hybrid`，如果模型或环境不可用，会自动回退。 |
-| `exhaustive` | 穷举所有可部署流水线，选择最终 `.cpss` 最小的方案。 |
-| `model` | 直接使用模型预测一条流水线，不做额外试压比较。 |
-| `hybrid` | 先由模型排序，再只试压 Top-K 条流水线。 |
+| `model` | 直接使用 nnmax 模型预测一条流水线，不做额外试压缩 |
+| `hybrid` | 先用模型排序，再试压 Top-K 条并选择实际 `.cpss` 最小者 |
+| `exhaustive` | 穷举全部可部署流水线 |
+| `auto` | 优先使用 `hybrid`，失败时回退到 `exhaustive` |
 
-## 解压入口
+首次在新环境里使用时，建议选择 `--selector auto`。如果想获得确定的模型预测路径，可以显式使用 `--selector model`。
+
+## Decompress
 
 命令格式：
 
@@ -92,33 +70,14 @@ python -m Compressor.cli compress <输入文件> [-o 输出文件] [其他参数
 python -m Compressor.cli decompress <输入.cpss> [-o 输出文件]
 ```
 
-解压命令对应代码入口：
-
-- 命令行入口函数：`command_decompress`
-- 核心文件：[cli.py](<c:/Users/Lenovo/Desktop/project/Compressor/cli.py:1>)
-
 默认输出规则：
 
-- 输入：`example.bin.cpss`
-- 输出：`example.bin`
+- 输入 `example.bin.cpss`
+- 输出 `example.bin`
 
-### 参数说明
+解压不需要再传 `dtype`、`shape` 或流水线名，因为 `.cpss` 文件已经保存了 `pipeline_id`、流水线名、上下文元数据和尾字节信息。
 
-| 参数 | 是否必填 | 默认值 | 功能 |
-| --- | --- | --- | --- |
-| `input` | 是 | 无 | 要解压的 `.cpss` 文件路径。 |
-| `-o`, `--output` | 否 | 去掉 `.cpss` 后缀后的路径 | 指定解压后的输出文件路径。 |
-
-### 解压时会自动完成的事
-
-解压不需要你手动再传 `dtype`、`shape` 或流水线名，因为 `.cpss` 文件内部已经保存了：
-
-- `pipeline_id`
-- `pipeline_name`
-- 上下文元数据
-- 尾字节信息
-
-## Inspect 入口
+## Inspect
 
 命令格式：
 
@@ -126,42 +85,37 @@ python -m Compressor.cli decompress <输入.cpss> [-o 输出文件]
 python -m Compressor.cli inspect <输入.cpss>
 ```
 
-对应代码入口：
+`inspect` 会输出 JSON，包含固定头字段和元数据，例如：
 
-- 命令行入口函数：`command_inspect`
+- format version
+- selector mode code
+- pipeline id
+- metadata size
+- tail size
+- payload size
+- original size
+- pipeline name
+- dtype、shape、endian 等上下文信息
 
-### 参数说明
+## `.cpss` 格式
 
-| 参数 | 是否必填 | 默认值 | 功能 |
-| --- | --- | --- | --- |
-| `input` | 是 | 无 | 要查看的 `.cpss` 文件路径。 |
+`.cpss` 文件结构：
 
-### 输出内容
+1. 固定 64 字节头部。
+2. UTF-8 JSON 元数据。
+3. 为保证严格无损而保留的尾字节。
+4. 压缩后的 payload。
 
-`inspect` 会输出 JSON，包含：
+头部保存 `pipeline_id`，解压时根据 ID 找回 `Compressor/deploy_registry.py` 中对应的可部署流水线。
 
-- 固定头字段
-- `pipeline_id`
-- `pipeline_name`
-- 原始大小
-- payload 大小
-- 元数据内容
+## 关键文件
 
-## `.cpss` 文件格式
-
-`.cpss` 文件结构如下：
-
-1. 固定 64 字节头部
-2. UTF-8 JSON 元数据
-3. 为保证严格无损而保留的尾字节
-4. 压缩后的 payload
-
-头部里保存了 `pipeline_id`，因此解压时可以只依赖文件本身恢复所需流水线。
-
-## 相关文件
-
-- [cli.py](<c:/Users/Lenovo/Desktop/project/Compressor/cli.py:1>)：命令行入口
-- [selector.py](<c:/Users/Lenovo/Desktop/project/Compressor/selector.py:1>)：流水线选择
-- [reversible.py](<c:/Users/Lenovo/Desktop/project/Compressor/reversible.py:1>)：可逆压缩和解压核心
-- [container.py](<c:/Users/Lenovo/Desktop/project/Compressor/container.py:1>)：`.cpss` 头部和元数据封装
-
+| 文件 | 作用 |
+| --- | --- |
+| `cli.py` | 命令行入口 |
+| `selector.py` | `model`、`hybrid`、`exhaustive`、`auto` 选线逻辑 |
+| `deploy_registry.py` | 可部署流水线 ID 与名称 |
+| `reversible.py` | 可逆过滤器、压缩 payload 和解压恢复 |
+| `container.py` | `.cpss` 固定头与 JSON 元数据封装 |
+| `runtime.py` | dtype、shape、路径和流水线上下文构建 |
+| `feature_extraction.py` | nnmax 模型推理所需特征提取 |

@@ -1,0 +1,16 @@
+imagecodecs>=2023.1.23
+lz4>=4.3.0
+brotli>=1.1.0
+numcodecs>=0.16.5
+blosc2>=4.1.2
+pyliblzfse>=0.4.1
+zstandard>=0.19.0
+fpzip>=1.2.0
+zfpy>=1.0.0
+numpy>=1.20.0
+tqdm>=4.66.0
+torch>=2.2.0
+h5py>=3.10.0
+tifffile>=2024.2.12
+python-snappy>=0.7.3
+matplotlib>=3.8.0
